@@ -51,7 +51,68 @@ app.http('teams',{methods:['GET','POST','PUT'],authLevel:'anonymous',route:'team
     role: membership.role
   });
 }if(teamId){let m=await member(teamId,p.userId);if(!m)return json(403,{error:'Geen toegang'});let t=await teams.getEntity('team',teamId);return{jsonBody:{teamId,teamName:t.teamName,season:t.season,role:m.role}}}let arr=[];for await(const m of members.listEntities({queryOptions:{filter:`RowKey eq '${p.userId}'`}})){try{let t=await teams.getEntity('team',m.partitionKey);arr.push({teamId:t.teamId,teamName:t.teamName,season:t.season,role:m.role})}catch{}}return{jsonBody:arr}}});
-app.http('players',{methods:['GET','POST'],authLevel:'anonymous',route:'players',handler:async(req)=>{let p=who(req),c=tc('VTMPlayers');if(!p)return json(401,{error:'Niet ingelogd'});await ready(c);if(req.method==='POST'){let b=await req.json(),m=await requireMember(b.teamId,p,['Owner','Coach']);if(!m)return json(403,{error:'Geen schrijfrechten'});let x=id();await c.createEntity({partitionKey:b.teamId,rowKey:x,playerId:x,name:clean(b.name),number:clean(b.number,10),role:clean(b.role,30),active:true});return json(201,{playerId:x})}let teamId=req.query.get('teamId');if(!await requireMember(teamId,p))return json(403,{error:'Geen toegang'});let a=[];for await(const x of c.listEntities({queryOptions:{filter:`PartitionKey eq '${teamId}'`}}))a.push(x);return{jsonBody:a}}});
+app.http('players',methods:[
+  'GET',
+  'POST',
+  'PUT'
+],authLevel:'anonymous',route:'players/{playerId?}',handler:async(req)=>{let p=who(req),c=tc('VTMPlayers');if(!p)return json(401,{error:'Niet ingelogd'});await ready(c);const playerId = req.params.playerId;
+``if(req.method==='POST'){let b=await req.json(),m=await requireMember(b.teamId,p,['Owner','Coach']);if(!m)return json(403,{error:'Geen schrijfrechten'});let x=id();await c.createEntity({partitionKey:b.teamId,rowKey:x,playerId:x,name:clean(b.name),number:clean(b.number,10),role:clean(b.role,30),active:true});return json(201,{playerId:x})}if(req.method === 'PUT'){
+
+  const b = await req.json();
+
+  if(!playerId){
+    return json(400,{
+      error:'PlayerId ontbreekt.'
+    });
+  }
+
+  const membership = await requireMember(
+    b.teamId,
+    p,
+    ['Owner','Coach']
+  );
+
+  if(!membership){
+    return json(403,{
+      error:'Geen schrijfrechten'
+    });
+  }
+
+  const existing = await c.getEntity(
+    b.teamId,
+    playerId
+  );
+
+  const playerName = clean(b.name);
+
+  if(!playerName){
+    return json(400,{
+      error:'Naam is verplicht.'
+    });
+  }
+
+  existing.name = playerName;
+  existing.number = clean(
+    b.number,
+    10
+  );
+  existing.role = clean(
+    b.role,
+    30
+  );
+  existing.updatedDate =
+    new Date().toISOString();
+
+  await c.updateEntity(
+    existing,
+    'Replace'
+  );
+
+  return json(200,{
+    success:true,
+    playerId:playerId
+  });
+}let teamId=req.query.get('teamId');if(!await requireMember(teamId,p))return json(403,{error:'Geen toegang'});let a=[];for await(const x of c.listEntities({queryOptions:{filter:`PartitionKey eq '${teamId}'`}}))a.push(x);return{jsonBody:a}}});
 app.http('matches',{methods:['GET','POST'],authLevel:'anonymous',route:'matches',handler:async(req)=>{let p=who(req),c=tc('VTMMatches');if(!p)return json(401,{error:'Niet ingelogd'});await ready(c);if(req.method==='POST'){let b=await req.json();if(!await requireMember(b.teamId,p,['Owner','Coach']))return json(403,{error:'Geen schrijfrechten'});let x=id();await c.createEntity({partitionKey:b.teamId,rowKey:x,matchId:x,opponent:clean(b.opponent),matchDate:clean(b.matchDate,20),location:clean(b.location),status:'Planned',createdAt:new Date().toISOString()});return json(201,{matchId:x})}let teamId=req.query.get('teamId');if(!await requireMember(teamId,p))return json(403,{error:'Geen toegang'});let a=[];for await(const x of c.listEntities({queryOptions:{filter:`PartitionKey eq '${teamId}'`}}))a.push(x);return{jsonBody:a}}});
 app.http('members',{methods:['GET'],authLevel:'anonymous',route:'members',handler:async(req)=>{let p=who(req),teamId=req.query.get('teamId');if(!p||!await requireMember(teamId,p))return json(403,{error:'Geen toegang'});let c=tc('VTMTeamMembers');await ready(c);let a=[];for await(const x of c.listEntities({queryOptions:{filter:`PartitionKey eq '${teamId}'`}}))a.push(x);return{jsonBody:a}}});
 app.http('invitations',{methods:['POST'],authLevel:'anonymous',route:'invitations',handler:async(req)=>{let p=who(req),b=await req.json();if(!p||!await requireMember(b.teamId,p,['Owner']))return json(403,{error:'Alleen eigenaar'});let c=tc('VTMInvitations');await ready(c);let email=clean(b.email).toLowerCase();await c.upsertEntity({partitionKey:b.teamId,rowKey:crypto.createHash('sha256').update(email).digest('hex'),email,role:['Coach','Viewer'].includes(b.role)?b.role:'Viewer',createdAt:new Date().toISOString(),createdBy:p.userId},'Replace');return json(201,{ok:true})}});
