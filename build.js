@@ -1,0 +1,1 @@
+const fs=require('fs'),p=require('path'),d='dist';fs.rmSync(d,{recursive:true,force:true});fs.mkdirSync(d);['index.html','manifest.webmanifest','sw.js','staticwebapp.config.json'].forEach(f=>fs.copyFileSync(f,p.join(d,f)))

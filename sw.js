@@ -1,0 +1,1 @@
+const C='vtm-v1';self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/index.html','/manifest.webmanifest']))));self.addEventListener('fetch',e=>{let u=new URL(e.request.url);if(e.request.method==='GET'&&!u.pathname.startsWith('/api/')&&!u.pathname.startsWith('/.auth/'))e.respondWith(caches.match(e.request).then(x=>x||fetch(e.request)))})
