@@ -9,9 +9,53 @@ function renderTeams(){document.querySelector('#app').innerHTML=`<section class=
 function newTeamForm(){document.querySelector('#form').innerHTML=`<div class="card"><h3>Nieuw team</h3><div class="grid2"><div><label>Teamnaam</label><input id="tn" class="input"></div><div><label>Seizoen</label><input id="ts" class="input" placeholder="2026-2027"></div></div><button class="btn" onclick="createTeam()">Aanmaken</button></div>`}
 async function createTeam(){let teamName=document.querySelector('#tn').value.trim(),season=document.querySelector('#ts').value.trim();if(!teamName)return;await api('teams',{method:'POST',body:JSON.stringify({teamName,season})});await loadTeams()}
 async function openTeam(id){selected=await api('teams/'+id);tab='dashboard';renderTeam()}
+async function editTeam(){
+
+  const newName =
+    prompt(
+      'Teamnaam',
+      selected.teamName
+    );
+
+  if(!newName)
+    return;
+
+  const newSeason =
+    prompt(
+      'Seizoen',
+      selected.season || ''
+    );
+
+  await api(
+    'teams/' + selected.teamId,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        teamName: newName,
+        season: newSeason
+      })
+    }
+  );
+
+  selected.teamName =
+    newName;
+
+  selected.season =
+    newSeason;
+
+  renderTeam();
+
+}
 function nav(){return`<div class="nav"><button class="btn btn2" onclick="showTab('dashboard')">Dashboard</button><button class="btn btn2" onclick="showTab('players')">Spelers</button><button class="btn btn2" onclick="showTab('matches')">Wedstrijden</button><button class="btn btn2" onclick="showTab('members')">Coaches</button><button class="btn btn2" onclick="showTab('report')">Power BI export</button></div>`}
 async function showTab(x){tab=x;renderTeam()}
-async function renderTeam(){let a=document.querySelector('#app');a.innerHTML=`<button class="btn btn2" onclick="loadTeams()">← Mijn teams</button><section class="card"><div class="row"><div><h2>${esc(selected.teamName)}</h2><span class="pill">${esc(selected.role)}</span></div><div class="muted">${esc(selected.season)}</div></div>${nav()}<div id="pane" class="card">Laden...</div></section>`;let p=document.querySelector('#pane');if(tab==='dashboard')dashboard(p);if(tab==='players')players(p);if(tab==='matches')matches(p);if(tab==='members')members(p);if(tab==='report')report(p)}
+async function renderTeam(){let a=document.querySelector('#app');a.innerHTML=`<button class="btn btn2" onclick="loadTeams()">← Mijn teams</button><section class="card"><div class="row"><div><h2>${esc(selected.teamName)}</h2><span class="pill">${esc(selected.role)}</span><br>
+
+<button
+  class="btn btn2"
+  onclick="editTeam()"
+>
+  Team wijzigen
+</button></div><div class="muted">${esc(selected.season)}</div></div>${nav()}<div id="pane" class="card">Laden...</div></section>`;let p=document.querySelector('#pane');if(tab==='dashboard')dashboard(p);if(tab==='players')players(p);if(tab==='matches')matches(p);if(tab==='members')members(p);if(tab==='report')report(p)}
 async function dashboard(p){let d=await api('dashboard?teamId='+selected.teamId);p.innerHTML=`<h3>Dashboard</h3><div class="grid"><div class="card"><div class="muted">Spelers</div><div class="stat">${d.players}</div></div><div class="card"><div class="muted">Wedstrijden</div><div class="stat">${d.matches}</div></div><div class="card"><div class="muted">Sets</div><div class="stat">${d.sets}</div></div></div>`}
 async function players(p){let x=await api('players?teamId='+selected.teamId);p.innerHTML=`<div class="row"><h3>Spelers</h3><button class="btn" onclick="playerForm()">Speler toevoegen</button></div><div id="plist">${x.map(v=>`<div class="row"><div><b>${esc(v.name)}</b><div class="muted">#${esc(v.number)} · ${esc(v.role)}</div></div><span class="pill">${v.active?'Actief':'Inactief'}</span><button
   class="btn btn2"
