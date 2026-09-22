@@ -47,4 +47,4 @@ async function members(p){let x=await api('members?teamId='+selected.teamId);p.i
 function inviteForm(){document.querySelector('#iform').innerHTML=`<div class="card grid2"><input id="ie" class="input" type="email" placeholder="E-mailadres"><select id="ir" class="input"><option>Coach</option><option>Viewer</option></select><button class="btn" onclick="invite()">Uitnodiging vastleggen</button></div>`}
 async function invite(){await api('invitations',{method:'POST',body:JSON.stringify({teamId:selected.teamId,email:document.querySelector('#ie').value,role:document.querySelector('#ir').value})});alert('Uitnodiging vastgelegd.');members(document.querySelector('#pane'))}
 function report(p){p.innerHTML=`<h3>Power BI-export</h3><p>Open de genormaliseerde teamgegevens.</p><a class="btn" style="display:inline-block;text-decoration:none" href="/api/report-phase2?teamId=${selected.teamId}" target="_blank">Rapportagegegevens openen</a>`}
-init();</script></body></html>
+init();</script>/management-delete-ui.jsscript></body></html>
