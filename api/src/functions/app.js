@@ -488,7 +488,8 @@ function publicLineup(entity) {
   for (const role of LINEUP_ROLES) {
     players[role] = {
       playerId: entity[`${role}Id`] || '',
-      name: entity[`${role}Name`] || ''
+      name: entity[`${role}Name`] || '',
+      number: entity[`${role}Number`] || ''
     };
   }
   return {
@@ -614,6 +615,7 @@ liveRoute('lineupSave', 'lineup/save', ['POST'], async (request) => {
       }
       entity[`${role}Id`] = playerId;
       entity[`${role}Name`] = clean(player.name, 150);
+      entity[`${role}Number`] = clean(player.number, 10);
     }
 
     const lineupsClient = tableClient('VTMLineups');
