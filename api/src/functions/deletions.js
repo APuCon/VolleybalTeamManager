@@ -14,5 +14,24 @@ async function deleteByFilter(tableName,filter){const c=table(tableName);await e
 async function deleteMatchData(teamId,matchId){let deleted=0;for(const t of ['VTMPoints','VTMRotations','VTMSubstitutions','VTMAttendance'])deleted+=await deleteByFilter(t,`PartitionKey eq '${matchId}'`);for(const t of ['VTMSets','VTMLineups'])deleted+=await deleteByFilter(t,`PartitionKey eq '${teamId}' and matchId eq '${matchId}'`);const mc=table('VTMMatches');await ensure(mc);await deleteEntitySafe(mc,teamId,matchId);return deleted+1}
 app.http('deletePlayer',{methods:['DELETE'],authLevel:'anonymous',route:'admin/players/{playerId}',handler:async req=>{try{const p=principal(req),teamId=clean(req.query.get('teamId'),100),playerId=clean(req.params.playerId,100);if(!p)return response(401,{error:'Niet ingelogd'});if(!await authorize(teamId,p,['Owner','Coach']))return response(403,{error:'Geen schrijfrechten'});const pc=table('VTMPlayers');await ensure(pc);await deleteEntitySafe(pc,teamId,playerId);await deleteByFilter('VTMAttendance',`teamId eq '${teamId}' and playerId eq '${playerId}'`);return response(200,{ok:true})}catch(e){console.error('delete player failed',e);return response(500,{error:`Speler verwijderen mislukt: ${e.message||'onbekende fout'}`})}}});
 app.http('deleteMatch',{methods:['DELETE'],authLevel:'anonymous',route:'admin/matches/{matchId}',handler:async req=>{try{const p=principal(req),teamId=clean(req.query.get('teamId'),100),matchId=clean(req.params.matchId,100);if(!p)return response(401,{error:'Niet ingelogd'});if(!await authorize(teamId,p,['Owner','Coach']))return response(403,{error:'Geen schrijfrechten'});await deleteMatchData(teamId,matchId);return response(200,{ok:true})}catch(e){console.error('delete match failed',e);return response(500,{error:`Wedstrijd verwijderen mislukt: ${e.message||'onbekende fout'}`})}}});
-app.http('deleteMember',{methods:['DELETE'],authLevel:'anonymous',route:'admin/members/{userId}',handler:async req=>{try{const p=principal(req),teamId=clean(req.query.get('teamId'),100),userId=clean(req.params.userId,150);if(!p)return response(401,{error:'Niet ingelogd'});if(!await authorize(teamId,p,['Owner']))return response(403,{error:'Alleen de eigenaar mag coaches verwijderen'});const target=await membership(teamId,userId);if(!target)return response(404,{error:'Teamlid niet gevonden'});if(target.role==='Owner')return response(409,{error:'De eigenaar kan niet als coach worden verwijderd'});const c=table('VTMTeamMembers');await ensure(c);await deleteEntitySafe(c,teamId,userId);return response(200,{ok:true})}catch(e){console.error('delete member failed',e);return response(500,{error:`Coach verwijderen mislukt: ${e.message||'onbekende fout'}`})}}});
+app.http('removeMember',{methods:['POST'],authLevel:'anonymous',route:'admin/members/remove',handler:async req=>{try{
+  const p=principal(req);
+  if(!p)return response(401,{error:'Niet ingelogd'});
+  const body=await req.json();
+  const teamId=clean(body.teamId,100),memberId=clean(body.memberId,200);
+  if(!teamId||!memberId)return response(400,{error:'TeamId of teamlid-id ontbreekt'});
+  if(!await authorize(teamId,p,['Owner']))return response(403,{error:'Alleen de eigenaar mag coaches verwijderen'});
+  const target=await membership(teamId,memberId);
+  if(!target)return response(404,{error:'Teamlid niet gevonden. Vernieuw de pagina en probeer opnieuw.'});
+  if(target.role==='Owner')return response(409,{error:'De eigenaar kan niet uit het eigen team worden verwijderd'});
+  const members=table('VTMTeamMembers');await ensure(members);
+  await members.deleteEntity(teamId,memberId);
+  const email=clean(target.email,150).toLowerCase();
+  if(email){
+    const crypto=require('crypto'),invitations=table('VTMInvitations');
+    await ensure(invitations);
+    await deleteEntitySafe(invitations,teamId,crypto.createHash('sha256').update(email).digest('hex'));
+  }
+  return response(200,{ok:true,memberId});
+}catch(e){console.error('remove member failed',e);return response(500,{error:`Coach verwijderen mislukt: ${e.message||'onbekende fout'}`})}}});
 app.http('deleteTeam',{methods:['DELETE'],authLevel:'anonymous',route:'admin/teams/{teamId}',handler:async req=>{try{const p=principal(req),teamId=clean(req.params.teamId,100);if(!p)return response(401,{error:'Niet ingelogd'});if(!await authorize(teamId,p,['Owner']))return response(403,{error:'Alleen de eigenaar mag het team verwijderen'});const mc=table('VTMMatches');await ensure(mc);const matchIds=[];for await(const x of mc.listEntities({queryOptions:{filter:`PartitionKey eq '${teamId}'`}}))matchIds.push(x.matchId||x.rowKey);for(const matchId of matchIds)await deleteMatchData(teamId,matchId);for(const t of ['VTMPlayers','VTMTeamMembers','VTMInvitations','VTMSets','VTMLineups'])await deleteByFilter(t,`PartitionKey eq '${teamId}'`);const teams=table('VTMTeams');await ensure(teams);await deleteEntitySafe(teams,'team',teamId);return response(200,{ok:true})}catch(e){console.error('delete team failed',e);return response(500,{error:`Team verwijderen mislukt: ${e.message||'onbekende fout'}`})}}});
