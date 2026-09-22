@@ -2,6 +2,9 @@
 
 const { app } = require('@azure/functions');
 const { TableClient } = require('@azure/data-tables');
+require('./attendance');
+require('./substitutions');
+
 const crypto = require('crypto');
 
 const connectionString = () => process.env.VOLLEYBALL_STORAGE_CONNECTION;
