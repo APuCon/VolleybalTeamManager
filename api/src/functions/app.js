@@ -335,7 +335,7 @@ app.http('members', {
     for await (const membership of members.listEntities({
       queryOptions: { filter: `PartitionKey eq '${teamId}'` }
     })) {
-      result.push(membership);
+      result.push({memberId:membership.rowKey,email:membership.email||'',role:membership.role||'Viewer',joinedAt:membership.joinedAt||''});
     }
 
     return response(200, result);
@@ -467,7 +467,40 @@ liveRoute('liveStart','live/start',['POST'],async req=>{let p=getPrincipal(req);
 liveRoute('liveStatus','live/status',['GET'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let teamId=req.query.get('teamId'),matchId=req.query.get('matchId'),a=await liveAccess(teamId,matchId,p);if(a.error)return a.error;return response(200,await liveStatus(teamId,matchId))});
 liveRoute('livePoint','live/point',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json();if(!['team','opponent'].includes(b.winner))return response(400,{error:'Ongeldige winnaar'});let a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;if(a.match.status!=='Live')return response(409,{error:'Deze wedstrijd is niet actief'});let sd=await liveSets(b.teamId,b.matchId),s=sd.items.find(x=>!x.completed);if(!s)return response(409,{error:'Start eerst de volgende set'});s.teamScore=Number(s.teamScore||0)+(b.winner==='team'?1:0);s.opponentScore=Number(s.opponentScore||0)+(b.winner==='opponent'?1:0);if(isSetWon(s.teamScore,s.opponentScore,Number(s.setNumber))){s.completed=true;s.winner=s.teamScore>s.opponentScore?'team':'opponent';s.completedAt=new Date().toISOString()}s.updatedAt=new Date().toISOString();await sd.client.updateEntity(s,'Replace');let pc=tableClient('VTMPoints');await ensureTable(pc);let k=`${Date.now()}_${createId()}`;await pc.createEntity({partitionKey:b.matchId,rowKey:k,pointId:k,teamId:b.teamId,matchId:b.matchId,setNumber:Number(s.setNumber),winner:b.winner,teamScore:s.teamScore,opponentScore:s.opponentScore,createdAt:new Date().toISOString(),createdBy:p.userId});return response(200,await liveStatus(b.teamId,b.matchId))});
 liveRoute('liveUndo','live/undo',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let sd=await liveSets(b.teamId,b.matchId),s=[...sd.items].reverse().find(x=>Number(x.teamScore||0)+Number(x.opponentScore||0)>0);if(!s)return response(409,{error:'Geen punt om terug te draaien'});let pd=await livePoints(b.matchId,s.setNumber),last=pd.items.at(-1);if(!last)return response(409,{error:'Geen punt om terug te draaien'});await pd.client.deleteEntity(b.matchId,last.rowKey);s.teamScore=Math.max(0,Number(s.teamScore||0)-(last.winner==='team'?1:0));s.opponentScore=Math.max(0,Number(s.opponentScore||0)-(last.winner==='opponent'?1:0));s.completed=false;s.winner='';s.completedAt='';s.updatedAt=new Date().toISOString();await sd.client.updateEntity(s,'Replace');return response(200,await liveStatus(b.teamId,b.matchId))});
-liveRoute('liveNextSet','live/next-set',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let st=await liveStatus(b.teamId,b.matchId,false);if(st.currentSet&&!st.currentSet.completed)return response(409,{error:'De huidige set is nog niet afgelopen'});if(st.teamSets>=3||st.opponentSets>=3)return response(409,{error:'De wedstrijd is al beslist'});let n=st.sets.length+1;if(n>5)return response(409,{error:'Maximaal vijf sets toegestaan'});let c=tableClient('VTMSets');await ensureTable(c);let k=liveSetKey(b.matchId,n);await c.createEntity({partitionKey:b.teamId,rowKey:k,setId:k,matchId:b.matchId,setNumber:n,teamScore:0,opponentScore:0,winner:'',completed:false,createdAt:new Date().toISOString()});return response(200,await liveStatus(b.teamId,b.matchId))});
+liveRoute('liveNextSet','live/next-set',['POST'],async req=>{
+  let p=getPrincipal(req);
+  if(!p)return response(401,{error:'Niet ingelogd'});
+  let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);
+  if(a.error)return a.error;
+  let st=await liveStatus(b.teamId,b.matchId,false);
+  if(st.currentSet&&!st.currentSet.completed)return response(409,{error:'De huidige set is nog niet afgelopen'});
+  if(st.teamSets>=3||st.opponentSets>=3)return response(409,{error:'De wedstrijd is al beslist'});
+  let n=st.sets.length+1;
+  if(n>5)return response(409,{error:'Maximaal vijf sets toegestaan'});
+  let sets=tableClient('VTMSets');await ensureTable(sets),setId=liveSetKey(b.matchId,n);
+  await sets.createEntity({partitionKey:b.teamId,rowKey:setId,setId,matchId:b.matchId,setNumber:n,teamScore:0,opponentScore:0,winner:'',completed:false,createdAt:new Date().toISOString()});
+
+  // Neem de definitieve veldbezetting van de vorige set over. Eventuele wissels
+  // zijn al in die lineup verwerkt. De wisselhistorie zelf start opnieuw per set.
+  let previous=await getLineup(b.teamId,b.matchId,n-1);
+  if(previous.item){
+    let source=previous.item,lineups=tableClient('VTMLineups');await ensureTable(lineups);
+    let copied={
+      partitionKey:b.teamId,rowKey:lineupKey(b.matchId,n),lineupId:lineupKey(b.matchId,n),
+      matchId:b.matchId,setNumber:n,startRole:source.startRole||'setter',
+      initialServer:source.initialServer||'team',serving:source.initialServer||'team',
+      rotation:Number(source.rotation||1),copiedFromSet:n-1,
+      createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),updatedBy:p.userId
+    };
+    for(const role of LINEUP_ROLES){
+      copied[`${role}Id`]=source[`${role}Id`]||'';
+      copied[`${role}Name`]=source[`${role}Name`]||'';
+      copied[`${role}Number`]=source[`${role}Number`]||'';
+    }
+    await lineups.upsertEntity(copied,'Replace');
+  }
+  return response(200,await phase2Status(b.teamId,b.matchId));
+});
 liveRoute('liveFinish','live/finish',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let st=await liveStatus(b.teamId,b.matchId,false);if(st.teamSets<3&&st.opponentSets<3)return response(409,{error:'De wedstrijd is nog niet beslist'});a.match.status='Completed';a.match.completedAt=new Date().toISOString();a.match.teamSets=st.teamSets;a.match.opponentSets=st.opponentSets;a.match.winner=st.teamSets>st.opponentSets?'team':'opponent';a.match.updatedAt=new Date().toISOString();await a.matches.updateEntity(a.match,'Replace');return response(200,await liveStatus(b.teamId,b.matchId))});
 
 // Fase 2: opstellingen, 5-1-rotaties en servicewissels
