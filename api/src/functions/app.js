@@ -4,9 +4,61 @@ const { app } = require('@azure/functions');
 const { TableClient } = require('@azure/data-tables');
 require('./attendance');
 require('./substitutions');
-require('./deletions');
+//require('./deletions');
 require('./next-set-safe');
+async function deleteEntitySafe(client, pk, rk) {
+  try {
+    await client.deleteEntity(pk, rk);
+  } catch (error) {
+    if (error.statusCode !== 404) throw error;
+  }
+}
 
+async function deleteByFilter(tableName, filter) {
+  const client = tableClient(tableName);
+  await ensureTable(client);
+
+  const rows = [];
+
+  for await (const row of client.listEntities({
+    queryOptions: { filter }
+  })) {
+    rows.push([row.partitionKey, row.rowKey]);
+  }
+
+  for (const [pk, rk] of rows) {
+    await deleteEntitySafe(client, pk, rk);
+  }
+
+  return rows.length;
+}
+
+async function deleteMatchCascade(teamId, matchId) {
+  await deleteByFilter(
+    'VTMPoints',
+    `PartitionKey eq '${matchId}'`
+  );
+
+  await deleteByFilter(
+    'VTMRotations',
+    `PartitionKey eq '${matchId}'`
+  );
+
+  await deleteByFilter(
+    'VTMSubstitutions',
+    `PartitionKey eq '${matchId}'`
+  );
+
+  await deleteByFilter(
+    'VTMAttendance',
+    `teamId eq '${teamId}' and matchId eq '${matchId}'`
+  );
+
+  const matches = tableClient('VTMMatches');
+  await ensureTable(matches);
+
+  await deleteEntitySafe(matches, teamId, matchId);
+}
 const crypto = require('crypto');
 
 const connectionString = () => process.env.VOLLEYBALL_STORAGE_CONNECTION;
@@ -853,4 +905,121 @@ liveRoute('phase2Report', 'report-phase2', ['GET'], async (request) => {
     })) result[key].push(entity);
   }
   return response(200, result);
+});
+app.http('removePlayer', {
+  methods: ['POST'],
+  authLevel: 'anonymous',
+  route: 'admin/remove/player',
+  handler: async (request) => {
+    try {
+      const principal = getPrincipal(request);
+
+      if (!principal) {
+        return response(401, { error: 'Niet ingelogd' });
+      }
+
+      const body = await request.json();
+
+      const teamId = clean(body.teamId, 100);
+      const playerId = clean(body.playerId, 100);
+
+      const membership = await requireMember(
+        teamId,
+        principal,
+        ['Owner', 'Coach']
+      );
+
+      if (!membership) {
+        return response(403, { error: 'Geen schrijfrechten' });
+      }
+
+      const players = tableClient('VTMPlayers');
+      await ensureTable(players);
+
+      await deleteEntitySafe(players, teamId, playerId);
+
+      return response(200, { ok: true });
+    } catch (error) {
+      return response(500, { error: error.message });
+    }
+  }
+});
+
+app.http('removeMatch', {
+  methods: ['POST'],
+  authLevel: 'anonymous',
+  route: 'admin/remove/match',
+  handler: async (request) => {
+    try {
+      const principal = getPrincipal(request);
+
+      if (!principal) {
+        return response(401, { error: 'Niet ingelogd' });
+      }
+
+      const body = await request.json();
+
+      const teamId = clean(body.teamId, 100);
+      const matchId = clean(body.matchId, 100);
+
+      const membership = await requireMember(
+        teamId,
+        principal,
+        ['Owner', 'Coach']
+      );
+
+      if (!membership) {
+        return response(403, { error: 'Geen schrijfrechten' });
+      }
+
+      await deleteMatchCascade(teamId, matchId);
+
+      return response(200, { ok: true });
+    } catch (error) {
+      return response(500, { error: error.message });
+    }
+  }
+});
+
+app.http('removeTeam', {
+  methods: ['POST'],
+  authLevel: 'anonymous',
+  route: 'admin/remove/team',
+  handler: async (request) => {
+    try {
+      const principal = getPrincipal(request);
+
+      if (!principal) {
+        return response(401, { error: 'Niet ingelogd' });
+      }
+
+      const body = await request.json();
+      const teamId = clean(body.teamId, 100);
+
+      const membership = await requireMember(
+        teamId,
+        principal,
+        ['Owner']
+      );
+
+      if (!membership) {
+        return response(403, {
+          error: 'Alleen eigenaar mag verwijderen'
+        });
+      }
+
+      const teams = tableClient('VTMTeams');
+      await ensureTable(teams);
+
+      await deleteEntitySafe(
+        teams,
+        'team',
+        teamId
+      );
+
+      return response(200, { ok: true });
+    } catch (error) {
+      return response(500, { error: error.message });
+    }
+  }
 });
