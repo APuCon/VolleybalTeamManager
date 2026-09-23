@@ -5,6 +5,7 @@ const { TableClient } = require('@azure/data-tables');
 require('./attendance');
 require('./substitutions');
 require('./deletions');
+require('./next-set-safe');
 
 const crypto = require('crypto');
 
