@@ -504,8 +504,20 @@ liveRoute('liveNextSet','live/next-set',['POST'],async req=>{
   }
   return response(200,await phase2Status(b.teamId,b.matchId));
 });
-function requiredSetsForMatch(type,teamSets,opponentSets,completed){if(type==='Cup')return 3;if(completed<4)return 4;return teamSets===2&&opponentSets===2?5:4}
-liveRoute('liveFinish','live/finish',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let st=await liveStatus(b.teamId,b.matchId,false),completed=st.sets.filter(x=>x.completed).length,type=a.match.matchType||'Competition',required=requiredSetsForMatch(type,st.teamSets,st.opponentSets,completed);if(completed<required)return response(409,{error:type==='Cup'?`Een bekerwedstrijd bestaat uit 3 sets. Er zijn ${completed} sets afgerond.`:`Deze competitiewedstrijd vereist ${required} afgeronde sets.`});a.match.status='Completed';a.match.completedAt=new Date().toISOString();a.match.teamSets=st.teamSets;a.match.opponentSets=st.opponentSets;a.match.winner=st.teamSets>st.opponentSets?'team':'opponent';a.match.updatedAt=new Date().toISOString();await a.matches.updateEntity(a.match,'Replace');return response(200,await liveStatus(b.teamId,b.matchId))});
+function requiredSetsForMatch(type,teamSets,opponentSets,completed){
+  if(type==='Cup')return 3;
+  if(completed<4)return 4;
+  return teamSets===2&&opponentSets===2?5:4;
+}
+liveRoute('liveFinish','live/finish',['POST'],async req=>{
+  let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});
+  let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;
+  let st=await liveStatus(b.teamId,b.matchId,false),completed=st.sets.filter(x=>x.completed).length,type=a.match.matchType||'Competition';
+  let required=requiredSetsForMatch(type,st.teamSets,st.opponentSets,completed);
+  if(completed<required)return response(409,{error:type==='Cup'?`Een bekerwedstrijd bestaat uit 3 sets. Er zijn ${completed} sets afgerond.`:`Deze competitiewedstrijd vereist ${required} afgeronde sets.`});
+  a.match.status='Completed';a.match.completedAt=new Date().toISOString();a.match.teamSets=st.teamSets;a.match.opponentSets=st.opponentSets;a.match.winner=st.teamSets>st.opponentSets?'team':st.opponentSets>st.teamSets?'opponent':'draw';a.match.updatedAt=new Date().toISOString();
+  await a.matches.updateEntity(a.match,'Replace');return response(200,await liveStatus(b.teamId,b.matchId));
+});
 // Fase 2: opstellingen, 5-1-rotaties en servicewissels
 const LINEUP_ROLES = ['setter', 'buiten1', 'midden1', 'dia', 'buiten2', 'midden2'];
 const LINEUP_SEQUENCE = ['setter', 'buiten1', 'midden1', 'dia', 'buiten2', 'midden2'];
