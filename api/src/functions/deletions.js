@@ -1,3 +1,4 @@
+console.log('deletions.js loaded');
 'use strict';
 const { app } = require('@azure/functions');
 const { TableClient } = require('@azure/data-tables');
