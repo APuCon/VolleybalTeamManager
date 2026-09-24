@@ -1,8 +1,8 @@
 {
   "name": "vtm-api",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
-  "main": "src/app.js",
+  "main": "src/index.js",
   "dependencies": {
     "@azure/functions": "^4.7.0",
     "@azure/data-tables": "^13.3.0"
