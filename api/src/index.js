@@ -1,1 +1,1 @@
-require('./functions/app')
+require('./app');
