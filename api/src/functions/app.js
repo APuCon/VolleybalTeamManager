@@ -398,12 +398,38 @@ app.http('members', {
 });
 
 app.http('invitations', {
-  methods: ['POST'],
+  methods: ['GET', 'POST'],
   authLevel: 'anonymous',
   route: 'invitations',
   handler: async (request) => {
     const principal = getPrincipal(request);
     if (!principal) return response(401, { error: 'Niet ingelogd' });
+
+    const teamId = request.query.get('teamId');
+    const isGet = request.method === 'GET';
+
+    if (isGet) {
+      if (!teamId) return response(400, { error: 'TeamId ontbreekt.' });
+      const membership = await requireMember(teamId, principal, ['Owner']);
+      if (!membership) return response(403, { error: 'Alleen eigenaar' });
+
+      const invitations = tableClient('VTMInvitations');
+      await ensureTable(invitations);
+
+      const result = [];
+      for await (const invitation of invitations.listEntities({
+        queryOptions: { filter: `PartitionKey eq '${teamId}'` }
+      })) {
+        result.push({
+          email: invitation.email || '',
+          role: invitation.role || 'Viewer',
+          createdAt: invitation.createdAt || '',
+          createdBy: invitation.createdBy || ''
+        });
+      }
+
+      return response(200, result);
+    }
 
     const body = await request.json();
     const membership = await requireMember(body.teamId, principal, ['Owner']);
@@ -513,64 +539,24 @@ app.http('report', {
 // Fase 1: live wedstrijdregistratie
 const liveSetKey=(matchId,n)=>`${matchId}_${String(n).padStart(2,'0')}`;
 const isSetWon=(a,b,n)=>(a>=(n===5?15:25)||b>=(n===5?15:25))&&Math.abs(a-b)>=2;
-async function liveAccess(teamId,matchId,p,roles){let m=await requireMember(teamId,p,roles);if(!m)return{error:response(403,{error:'Geen toegang'})};let c=tableClient('VTMMatches');await ensureTable(c);try{return{matches:c,match:await c.getEntity(teamId,matchId)}}catch(e){if(e.statusCode===404)return{error:response(404,{error:'Wedstrijd niet gevonden'})};throw e}}
-async function liveSets(teamId,matchId){let c=tableClient('VTMSets');await ensureTable(c);let a=[];for await(const x of c.listEntities({queryOptions:{filter:`PartitionKey eq '${teamId}' and matchId eq '${matchId}'`}}))a.push(x);a.sort((x,y)=>Number(x.setNumber)-Number(y.setNumber));return{client:c,items:a}}
-async function livePoints(matchId,setNumber){let c=tableClient('VTMPoints');await ensureTable(c);let a=[];for await(const x of c.listEntities({queryOptions:{filter:`PartitionKey eq '${matchId}' and setNumber eq ${Number(setNumber)}`}}))a.push(x);a.sort((x,y)=>String(x.createdAt).localeCompare(String(y.createdAt)));return{client:c,items:a}}
-async function liveStatus(teamId,matchId,includePoints=true){let mc=tableClient('VTMMatches');await ensureTable(mc);let m=await mc.getEntity(teamId,matchId),sd=await liveSets(teamId,matchId),teamSets=sd.items.filter(x=>x.winner==='team').length,opponentSets=sd.items.filter(x=>x.winner==='opponent').length,current=sd.items.find(x=>!x.completed)||sd.items.at(-1)||null,pts=includePoints&&current?(await livePoints(matchId,current.setNumber)).items:[];return{match:{matchId:m.matchId,teamId:m.partitionKey,opponent:m.opponent,matchDate:m.matchDate,location:m.location,matchType:m.matchType||'Competition',status:m.status,startedAt:m.startedAt||'',completedAt:m.completedAt||''},teamSets,opponentSets,currentSet:current?{setId:current.setId,setNumber:Number(current.setNumber),teamScore:Number(current.teamScore||0),opponentScore:Number(current.opponentScore||0),winner:current.winner||'',completed:Boolean(current.completed)}:null,sets:sd.items.map(x=>({setId:x.setId,setNumber:Number(x.setNumber),teamScore:Number(x.teamScore||0),opponentScore:Number(x.opponentScore||0),winner:x.winner||'',completed:Boolean(x.completed)})),points:pts.map(x=>({pointId:x.pointId,setNumber:Number(x.setNumber),winner:x.winner,teamScore:Number(x.teamScore),opponentScore:Number(x.opponentScore),createdAt:x.createdAt}))}}
+async function liveAccess(teamId,matchId,p,roles){let m=await requireMember(teamId,p,roles);if(!m)return{error:response(403,{error:'Geen toegang'})};let c=tableClient('VTMMatches');await ensureTable(c);let match=await c.getEntity(teamId,matchId).catch(()=>null);return{match};}
+async function liveSets(teamId,matchId){let c=tableClient('VTMSets');await ensureTable(c);let a=[];for await(const x of c.listEntities({queryOptions:{filter:`PartitionKey eq '${teamId}' and matchId eq '${matchId}'`}}))a.push(x);return {items:a,client:c};}
+async function livePoints(matchId,setNumber){let c=tableClient('VTMPoints');await ensureTable(c);let a=[];for await(const x of c.listEntities({queryOptions:{filter:`PartitionKey eq '${matchId}' and setNumber eq ${setNumber}`}}))a.push(x);return {items:a,client:c};}
+async function liveStatus(teamId,matchId,includePoints=true){let mc=tableClient('VTMMatches');await ensureTable(mc);let m=await mc.getEntity(teamId,matchId),sd=await liveSets(teamId,matchId),teamSets=Number(m.teamSets||0),opponentSets=Number(m.opponentSets||0),sets=sd.items.sort((a,b)=>Number(a.setNumber)-Number(b.setNumber));let currentSet=sets.find(x=>!x.completed)||null;let result={match:m,sets,teamSets,opponentSets,currentSet};if(includePoints&&currentSet){let points=await livePoints(matchId,currentSet.setNumber);result.points=points.items.sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt));}return result;}
 function liveRoute(name,route,methods,handler){app.http(name,{methods,authLevel:'anonymous',route,handler})}
-liveRoute('liveStart','live/start',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let sd=await liveSets(b.teamId,b.matchId);if(!sd.items.length){let k=liveSetKey(b.matchId,1);await sd.client.createEntity({partitionKey:b.teamId,rowKey:k,setId:k,matchId:b.matchId,setNumber:1,teamScore:0,opponentScore:0,winner:'',completed:false,createdAt:new Date().toISOString()})}a.match.status='Live';a.match.startedAt=a.match.startedAt||new Date().toISOString();a.match.updatedAt=new Date().toISOString();await a.matches.updateEntity(a.match,'Replace');return response(200,await liveStatus(b.teamId,b.matchId))});
-liveRoute('liveStatus','live/status',['GET'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let teamId=req.query.get('teamId'),matchId=req.query.get('matchId'),a=await liveAccess(teamId,matchId,p);if(a.error)return a.error;return response(200,await liveStatus(teamId,matchId))});
-liveRoute('livePoint','live/point',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json();if(!['team','opponent'].includes(b.winner))return response(400,{error:'Ongeldige winnaar'});let a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;if(a.match.status!=='Live')return response(409,{error:'Deze wedstrijd is niet actief'});let sd=await liveSets(b.teamId,b.matchId),s=sd.items.find(x=>!x.completed);if(!s)return response(409,{error:'Start eerst de volgende set'});s.teamScore=Number(s.teamScore||0)+(b.winner==='team'?1:0);s.opponentScore=Number(s.opponentScore||0)+(b.winner==='opponent'?1:0);if(isSetWon(s.teamScore,s.opponentScore,Number(s.setNumber))){s.completed=true;s.winner=s.teamScore>s.opponentScore?'team':'opponent';s.completedAt=new Date().toISOString()}s.updatedAt=new Date().toISOString();await sd.client.updateEntity(s,'Replace');let pc=tableClient('VTMPoints');await ensureTable(pc);let k=`${Date.now()}_${createId()}`;await pc.createEntity({partitionKey:b.matchId,rowKey:k,pointId:k,teamId:b.teamId,matchId:b.matchId,setNumber:Number(s.setNumber),winner:b.winner,teamScore:s.teamScore,opponentScore:s.opponentScore,createdAt:new Date().toISOString(),createdBy:p.userId});return response(200,await liveStatus(b.teamId,b.matchId))});
-liveRoute('liveUndo','live/undo',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let sd=await liveSets(b.teamId,b.matchId),s=[...sd.items].reverse().find(x=>Number(x.teamScore||0)+Number(x.opponentScore||0)>0);if(!s)return response(409,{error:'Geen punt om terug te draaien'});let pd=await livePoints(b.matchId,s.setNumber),last=pd.items.at(-1);if(!last)return response(409,{error:'Geen punt om terug te draaien'});await pd.client.deleteEntity(b.matchId,last.rowKey);s.teamScore=Math.max(0,Number(s.teamScore||0)-(last.winner==='team'?1:0));s.opponentScore=Math.max(0,Number(s.opponentScore||0)-(last.winner==='opponent'?1:0));s.completed=false;s.winner='';s.completedAt='';s.updatedAt=new Date().toISOString();await sd.client.updateEntity(s,'Replace');return response(200,await liveStatus(b.teamId,b.matchId))});
-liveRoute('liveNextSet','live/next-set',['POST'],async req=>{
-  let p=getPrincipal(req);
-  if(!p)return response(401,{error:'Niet ingelogd'});
-  let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);
-  if(a.error)return a.error;
-  let st=await liveStatus(b.teamId,b.matchId,false);
-  if(st.currentSet&&!st.currentSet.completed)return response(409,{error:'De huidige set is nog niet afgelopen'});
-  if(st.teamSets>=3||st.opponentSets>=3)return response(409,{error:'De wedstrijd is al beslist'});
-  let n=st.sets.length+1;
-  if(n>5)return response(409,{error:'Maximaal vijf sets toegestaan'});
-  let sets=tableClient('VTMSets');await ensureTable(sets),setId=liveSetKey(b.matchId,n);
-  await sets.createEntity({partitionKey:b.teamId,rowKey:setId,setId,matchId:b.matchId,setNumber:n,teamScore:0,opponentScore:0,winner:'',completed:false,createdAt:new Date().toISOString()});
+liveRoute('liveStart','live/start',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let c=tableClient('VTMMatches');await ensureTable(c);let m=await c.getEntity(b.teamId,b.matchId);m.status='Live';m.startedAt=m.startedAt||new Date().toISOString();m.updatedAt=new Date().toISOString();await c.updateEntity(m,'Replace');return response(200,await liveStatus(b.teamId,b.matchId));});
+liveRoute('liveStatus','live/status',['GET'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let teamId=req.query.get('teamId'),matchId=req.query.get('matchId');if(!teamId||!matchId)return response(400,{error:'TeamId en matchId zijn vereist'});let access=await liveAccess(teamId,matchId,p);if(access.error)return access.error;return response(200,await liveStatus(teamId,matchId));});
+liveRoute('livePoint','live/point',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json();if(!['team','opponent'].includes(b.winner))return response(400,{error:'Ongeldige winnaar.'});let a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let st=await liveStatus(b.teamId,b.matchId,false),currentSet=st.currentSet;if(!currentSet)return response(409,{error:'Start eerst de volgende set.'});let c=tableClient('VTMPoints');await ensureTable(c);let pointId=`${Date.now()}_${createId()}`;currentSet.teamScore=Number(currentSet.teamScore||0)+(b.winner==='team'?1:0);currentSet.opponentScore=Number(currentSet.opponentScore||0)+(b.winner==='opponent'?1:0);if(isSetWon(currentSet.teamScore,currentSet.opponentScore,Number(currentSet.setNumber))){currentSet.completed=true;currentSet.winner=currentSet.teamScore>currentSet.opponentScore?'team':'opponent';currentSet.completedAt=new Date().toISOString();}currentSet.updatedAt=new Date().toISOString();let sets=tableClient('VTMSets');await ensureTable(sets);await sets.updateEntity(currentSet,'Replace');await c.createEntity({partitionKey:b.matchId,rowKey:pointId,pointId,teamId:b.teamId,matchId:b.matchId,setNumber:Number(currentSet.setNumber),winner:b.winner,teamScore:currentSet.teamScore,opponentScore:currentSet.opponentScore,createdAt:new Date().toISOString(),createdBy:p.userId});return response(200,await liveStatus(b.teamId,b.matchId));});
+liveRoute('liveUndo','live/undo',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json();let a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let st=await liveStatus(b.teamId,b.matchId,false),currentSet=[...st.sets].reverse().find(x=>Number(x.teamScore||0)+Number(x.opponentScore||0)>0);if(!currentSet)return response(409,{error:'Geen punt om terug te draaien.'});let points=await livePoints(b.matchId,currentSet.setNumber);let lastPoint=points.items.at(-1);if(!lastPoint)return response(409,{error:'Geen punt om terug te draaien.'});await points.client.deleteEntity(b.matchId,lastPoint.rowKey);currentSet.teamScore=Math.max(0,Number(currentSet.teamScore||0)-(lastPoint.winner==='team'?1:0));currentSet.opponentScore=Math.max(0,Number(currentSet.opponentScore||0)-(lastPoint.winner==='opponent'?1:0));currentSet.completed=false;currentSet.winner='';currentSet.completedAt='';currentSet.updatedAt=new Date().toISOString();let sets=tableClient('VTMSets');await ensureTable(sets);await sets.updateEntity(currentSet,'Replace');return response(200,await liveStatus(b.teamId,b.matchId));});
+liveRoute('liveNextSet','live/next-set',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let st=await liveStatus(b.teamId,b.matchId,false);if(st.currentSet&&!st.currentSet.completed)return response(409,{error:'De huidige set is nog niet afgelopen'});let n=st.sets.length+1;let sets=tableClient('VTMSets');await ensureTable(sets);let setId=liveSetKey(b.matchId,n);await sets.createEntity({partitionKey:b.teamId,rowKey:setId,setId,matchId:b.matchId,setNumber:n,teamScore:0,opponentScore:0,winner:'',completed:false,createdAt:new Date().toISOString()});return response(200,await liveStatus(b.teamId,b.matchId));});
+liveRoute('liveFinish','live/finish',['POST'],async req=>{let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;let st=await liveStatus(b.teamId,b.matchId,false),m=a.match;m.status='Completed';m.completedAt=new Date().toISOString();m.updatedAt=new Date().toISOString();let matches=tableClient('VTMMatches');await ensureTable(matches);await matches.updateEntity(m,'Replace');return response(200,await liveStatus(b.teamId,b.matchId));});
 
-  // Neem de definitieve veldbezetting van de vorige set over. Eventuele wissels
-  // zijn al in die lineup verwerkt. De wisselhistorie zelf start opnieuw per set.
-  let previous=await getLineup(b.teamId,b.matchId,n-1);
-  if(previous.item){
-    let source=previous.item,lineups=tableClient('VTMLineups');await ensureTable(lineups);
-    let copied={
-      partitionKey:b.teamId,rowKey:lineupKey(b.matchId,n),lineupId:lineupKey(b.matchId,n),
-      matchId:b.matchId,setNumber:n,startRole:source.startRole||'setter',
-      initialServer:source.initialServer||'team',serving:source.initialServer||'team',
-      rotation:Number(source.rotation||1),copiedFromSet:n-1,
-      createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),updatedBy:p.userId
-    };
-    for(const role of LINEUP_ROLES){
-      copied[`${role}Id`]=source[`${role}Id`]||'';
-      copied[`${role}Name`]=source[`${role}Name`]||'';
-      copied[`${role}Number`]=source[`${role}Number`]||'';
-    }
-    await lineups.upsertEntity(copied,'Replace');
-  }
-  return response(200,await phase2Status(b.teamId,b.matchId));
-});
 function requiredSetsForMatch(type,teamSets,opponentSets,completed){
   if(type==='Cup')return 3;
   if(completed<4)return 4;
   return teamSets===2&&opponentSets===2?5:4;
 }
-liveRoute('liveFinish','live/finish',['POST'],async req=>{
-  let p=getPrincipal(req);if(!p)return response(401,{error:'Niet ingelogd'});
-  let b=await req.json(),a=await liveAccess(b.teamId,b.matchId,p,['Owner','Coach']);if(a.error)return a.error;
-  let st=await liveStatus(b.teamId,b.matchId,false),completed=st.sets.filter(x=>x.completed).length,type=a.match.matchType||'Competition';
-  let required=requiredSetsForMatch(type,st.teamSets,st.opponentSets,completed);
-  if(completed<required)return response(409,{error:type==='Cup'?`Een bekerwedstrijd bestaat uit 3 sets. Er zijn ${completed} sets afgerond.`:`Deze competitiewedstrijd vereist ${required} afgeronde sets.`});
-  a.match.status='Completed';a.match.completedAt=new Date().toISOString();a.match.teamSets=st.teamSets;a.match.opponentSets=st.opponentSets;a.match.winner=st.teamSets>st.opponentSets?'team':st.opponentSets>st.teamSets?'opponent':'draw';a.match.updatedAt=new Date().toISOString();
-  await a.matches.updateEntity(a.match,'Replace');return response(200,await liveStatus(b.teamId,b.matchId));
-});
-// Fase 2: opstellingen, 5-1-rotaties en servicewissels
+
 const LINEUP_ROLES = ['setter', 'buiten1', 'midden1', 'dia', 'buiten2', 'midden2'];
 const LINEUP_SEQUENCE = ['setter', 'buiten1', 'midden1', 'dia', 'buiten2', 'midden2'];
 const lineupKey = (matchId, setNumber) => `${matchId}_${String(setNumber).padStart(2, '0')}`;
@@ -653,7 +639,6 @@ liveRoute('lineupGet', 'lineup', ['GET'], async (request) => {
   return response(200, { lineup: publicLineup(data.item) });
 });
 
-// Robuuste lineup/save-route
 liveRoute('lineupSave', 'lineup/save', ['POST'], async (request) => {
   try {
     const principal = getPrincipal(request);
@@ -906,3 +891,4 @@ liveRoute('phase2Report', 'report-phase2', ['GET'], async (request) => {
   }
   return response(200, result);
 });
+
