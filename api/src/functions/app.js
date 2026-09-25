@@ -405,17 +405,15 @@ app.http('invitations', {
     const principal = getPrincipal(request);
     if (!principal) return response(401, { error: 'Niet ingelogd' });
 
-    const teamId = request.query.get('teamId');
-    const isGet = request.method === 'GET';
-    const isDelete = request.method === 'DELETE';
+    const invitations = tableClient('VTMInvitations');
+    await ensureTable(invitations);
 
-    if (isGet) {
+    if (request.method === 'GET') {
+      const teamId = request.query.get('teamId');
       if (!teamId) return response(400, { error: 'TeamId ontbreekt.' });
+
       const membership = await requireMember(teamId, principal, ['Owner']);
       if (!membership) return response(403, { error: 'Alleen eigenaar' });
-
-      const invitations = tableClient('VTMInvitations');
-      await ensureTable(invitations);
 
       const result = [];
       for await (const invitation of invitations.listEntities({
@@ -432,21 +430,27 @@ app.http('invitations', {
       return response(200, result);
     }
 
-    if (isDelete) {
-      const body = await request.json().catch(() => ({}));
-      const deleteTeamId = body.teamId || teamId;
-      const email = clean(body.email || '', 150).toLowerCase();
-      if (!deleteTeamId || !email) return response(400, { error: 'TeamId en e-mailadres zijn verplicht.' });
+    if (request.method === 'DELETE') {
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        body = {};
+      }
 
-      const membership = await requireMember(deleteTeamId, principal, ['Owner']);
+      const teamId = body.teamId;
+      const email = clean(body.email || '').toLowerCase();
+
+      if (!teamId) return response(400, { error: 'TeamId ontbreekt.' });
+      if (!email) return response(400, { error: 'E-mailadres is verplicht.' });
+
+      const membership = await requireMember(teamId, principal, ['Owner']);
       if (!membership) return response(403, { error: 'Alleen eigenaar' });
 
-      const invitations = tableClient('VTMInvitations');
-      await ensureTable(invitations);
       const rowKey = crypto.createHash('sha256').update(email).digest('hex');
 
       try {
-        await invitations.deleteEntity(deleteTeamId, rowKey);
+        await invitations.deleteEntity(teamId, rowKey);
       } catch (error) {
         if (error.statusCode !== 404) throw error;
       }
@@ -454,15 +458,19 @@ app.http('invitations', {
       return response(200, { ok: true });
     }
 
-    const body = await request.json();
+    // POST
+    let body = {};
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+
     const membership = await requireMember(body.teamId, principal, ['Owner']);
     if (!membership) return response(403, { error: 'Alleen eigenaar' });
 
     const email = clean(body.email).toLowerCase();
     if (!email) return response(400, { error: 'E-mailadres is verplicht.' });
-
-    const invitations = tableClient('VTMInvitations');
-    await ensureTable(invitations);
 
     await invitations.upsertEntity(
       {
