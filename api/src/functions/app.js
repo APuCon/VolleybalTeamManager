@@ -398,7 +398,7 @@ app.http('members', {
 });
 
 app.http('invitations', {
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'DELETE'],
   authLevel: 'anonymous',
   route: 'invitations',
   handler: async (request) => {
@@ -407,6 +407,7 @@ app.http('invitations', {
 
     const teamId = request.query.get('teamId');
     const isGet = request.method === 'GET';
+    const isDelete = request.method === 'DELETE';
 
     if (isGet) {
       if (!teamId) return response(400, { error: 'TeamId ontbreekt.' });
@@ -429,6 +430,28 @@ app.http('invitations', {
       }
 
       return response(200, result);
+    }
+
+    if (isDelete) {
+      const body = await request.json().catch(() => ({}));
+      const deleteTeamId = body.teamId || teamId;
+      const email = clean(body.email || '', 150).toLowerCase();
+      if (!deleteTeamId || !email) return response(400, { error: 'TeamId en e-mailadres zijn verplicht.' });
+
+      const membership = await requireMember(deleteTeamId, principal, ['Owner']);
+      if (!membership) return response(403, { error: 'Alleen eigenaar' });
+
+      const invitations = tableClient('VTMInvitations');
+      await ensureTable(invitations);
+      const rowKey = crypto.createHash('sha256').update(email).digest('hex');
+
+      try {
+        await invitations.deleteEntity(deleteTeamId, rowKey);
+      } catch (error) {
+        if (error.statusCode !== 404) throw error;
+      }
+
+      return response(200, { ok: true });
     }
 
     const body = await request.json();
