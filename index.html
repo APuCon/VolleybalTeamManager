@@ -562,17 +562,22 @@
     async function members(p) {
       let x = await api('members?teamId=' + selected.teamId);
       let invites = [];
+      let invitationError = '';
+      
       if (selected.role === 'Owner') {
         try {
           invites = await api('invitations?teamId=' + selected.teamId) || [];
         } catch (e) {
-          invites = [];
+          invitationError = e.message || 'Uitnodigingen konden niet worden geladen.';
         }
       }
 
-      const invitesHtml = selected.role === 'Owner'
-        ? `<div class="row"><h3>Openstaande uitnodigingen</h3></div>
-           ${invites.length ? invites.map(inv => `
+const invitesHtml = selected.role === 'Owner'
+  ? `<div class="row"><h3>Openstaande uitnodigingen</h3></div>
+     ${invitationError
+       ? `<p class="muted">Fout bij laden van uitnodigingen: ${esc(invitationError)}</p>`
+       : invites.length
+         ? invites.map(inv => `
              <div class="row">
                <div>${esc(inv.email)}</div>
                <div class="row-actions">
@@ -580,8 +585,9 @@
                  <button class="btn danger" onclick="deleteInvitation('${String(inv.email || '').replace(/\\\\/g, '\\\\\\\\').replace(/'/g, \"\\\\'\")}')">Annuleren</button>
                </div>
              </div>
-           `).join('') : '<p class=\"muted\">Geen openstaande uitnodigingen.</p>'}`
-        : '';
+              `).join('')
+                       : '<p class="muted">Geen openstaande uitnodigingen.</p>'}`
+                : '';
 
       p.innerHTML = `
         <div class="row">
