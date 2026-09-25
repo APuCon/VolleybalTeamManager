@@ -1,4 +1,4 @@
-const CACHE = 'vtm-v2';
+const CACHE = 'vtm-v3';
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest'];
 
 self.addEventListener('install', event => {
@@ -23,29 +23,33 @@ self.addEventListener('fetch', event => {
   const request = event.request;
   const url = new URL(request.url);
 
-  if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
+  if (request.method !== 'GET' || url.origin !== self.location.origin) {
     return;
   }
 
-  // Always prefer the deployed HTML so an old cached app cannot hide fixes.
+  if (url.pathname.startsWith('/api/')) {
+    return;
+  }
+
   if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
     event.respondWith(
       fetch(request, { cache: 'no-store' })
         .then(response => {
-          const copy = response.clone();
-          caches.open(CACHE).then(cache => cache.put(request, copy));
+          const clone = response.clone();
+          caches.open(CACHE).then(cache => cache.put(request, clone));
           return response;
         })
-        .catch(() => caches.match(request).then(response => response || caches.match('/index.html')))
+        .catch(() => caches.match('/index.html') || caches.match('/'))
     );
     return;
   }
 
   event.respondWith(
-    caches.match(request).then(cached => cached || fetch(request).then(response => {
-      const copy = response.clone();
-      caches.open(CACHE).then(cache => cache.put(request, copy));
-      return response;
-    }))
+    caches.match(request)
+      .then(cached => cached || fetch(request).then(response => {
+        const clone = response.clone();
+        caches.open(CACHE).then(cache => cache.put(request, clone));
+        return response;
+      }))
   );
 });
